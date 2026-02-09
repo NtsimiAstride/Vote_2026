@@ -1,24 +1,13 @@
 import streamlit as st
 import pandas as pd
 import uuid
-from streamlit_gsheets import GSheetsConnection # Ajout de la connexion
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Vote Keyce 2026", layout="wide")
 
-# --- CONNEXION BASE DE DONNÉES (Google Sheets) ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# Fonction pour lire les données depuis Sheets
-def load_data():
-    try:
-        return conn.read(worksheet="Candidats", ttl=0)
-    except:
-        # Si la feuille est vide, on crée une structure de base
-        return pd.DataFrame(columns=["nom", "desc", "votes"])
-
 # --- INITIALISATION ---
-# On garde le session_state pour les jetons et matricules (sécurité temporaire)
+if 'candidats' not in st.session_state:
+    st.session_state.candidats = []
 if 'tokens' not in st.session_state:
     st.session_state.tokens = {} 
 if 'matricules_autorises' not in st.session_state:
@@ -53,35 +42,29 @@ if menu == "Récupérer mon Jeton":
 # --- 2. VOTER ---
 elif menu == "Voter":
     st.title(f"🗳️ {st.session_state.titre_vote}")
-    
-    # Chargement depuis Google Sheets
-    df_candidats = load_data()
-    
-    if df_candidats.empty:
+    if not st.session_state.candidats:
         st.info("Le vote n'a pas encore commencé.")
     else:
-        # Affichage des candidats (dynamique depuis Sheets)
-        cols = st.columns(len(df_candidats))
-        for idx, row in df_candidats.iterrows():
+        cols = st.columns(len(st.session_state.candidats))
+        for idx, cand in enumerate(st.session_state.candidats):
             with cols[idx]:
-                # Note: La gestion des photos binaires dans Sheets est complexe, 
-                # ici on affiche le nom et la desc.
-                st.subheader(row['nom'])
-                st.caption(row['desc'])
+                st.image(cand['photo'], use_container_width=True)
+                st.subheader(cand['nom'])
+                st.caption(cand['desc'])
         
         st.divider()
-        choix = st.selectbox("Choisissez votre candidat", df_candidats['nom'].tolist())
+        choix = st.selectbox("Choisissez votre candidat", [c['nom'] for c in st.session_state.candidats])
         token_saisi = st.text_input("Entrez votre Jeton")
 
         if st.button("Valider le vote"):
             if token_saisi in st.session_state.tokens and st.session_state.tokens[token_saisi]:
-                # MISE À JOUR DANS GOOGLE SHEETS
-                df_candidats.loc[df_candidats["nom"] == choix, "votes"] += 1
-                conn.update(worksheet="Candidats", data=df_candidats)
-                
-                st.session_state.tokens[token_saisi] = False
-                st.balloons()
-                st.success(f"Vote pour {choix} pris en compte et enregistré dans la base !")
+                for c in st.session_state.candidats:
+                    if c['nom'] == choix:
+                        c['votes'] += 1
+                        st.session_state.tokens[token_saisi] = False
+                        st.balloons()
+                        st.success("Vote pris en compte !")
+                        break
             else:
                 st.error("Jeton invalide.")
 
@@ -90,18 +73,15 @@ else:
     st.title("⚙️ Administration")
     if st.text_input("Mot de passe", type="password") == "admin123":
         
+        # Titre et Candidats
         st.session_state.titre_vote = st.text_input("Nom du vote", value=st.session_state.titre_vote)
         
         with st.expander("Ajouter un candidat"):
             n = st.text_input("Nom")
             d = st.text_area("Description")
+            p = st.file_uploader("Photo", type=['jpg', 'png'])
             if st.button("Ajouter"):
-                # SAUVEGARDE DANS GOOGLE SHEETS
-                df_actuel = load_data()
-                nouveau = pd.DataFrame([{"nom": n, "desc": d, "votes": 0}])
-                df_final = pd.concat([df_actuel, nouveau], ignore_index=True)
-                conn.update(worksheet="Candidats", data=df_final)
-                st.success(f"Candidat {n} ajouté à la base de données !")
+                st.session_state.candidats.append({"nom":n, "desc":d, "photo":p.read(), "votes":0})
                 st.rerun()
 
         # GÉNÉRATEUR AUTOMATIQUE DE MATRICULES
@@ -114,15 +94,16 @@ else:
 
         if st.button("Générer la liste des matricules"):
             for i in range(int(debut), int(fin) + 1):
+                # Formatage avec des zéros (ex: MATA001)
                 m_genere = f"{prefixe}{i:03d}" 
                 st.session_state.matricules_autorises[m_genere] = True
             st.success(f"Matricules de {prefixe}{int(debut):03d} à {prefixe}{int(fin):03d} ajoutés !")
 
         st.write(f"Nombre total de matricules autorisés : {len(st.session_state.matricules_autorises)}")
         
-        # Résultats (Lecture directe depuis Sheets)
+        # Résultats
         st.divider()
-        df_resultats = load_data()
-        if not df_resultats.empty:
-            st.subheader("📊 Résultats en temps réel (Base de données)")
-            st.table(df_resultats[['nom', 'votes']])
+        if st.session_state.candidats:
+            st.subheader("📊 Résultats")
+            res_df = pd.DataFrame(st.session_state.candidats)
+            st.table(res_df[['nom', 'votes']])
